@@ -109,8 +109,6 @@ FcConfigCreate (void)
     if (!config->cacheDirs)
 	goto bail8;
 
-    config->blanks = 0;
-
     config->substPattern = 0;
     config->substFont = 0;
     config->substScan = 0;
@@ -275,9 +273,6 @@ FcConfigDestroy (FcConfig *config)
     FcFontSetDestroy (config->acceptPatterns);
     FcFontSetDestroy (config->rejectPatterns);
 
-    if (config->blanks)
-	FcBlanksDestroy (config->blanks);
-
     FcSubstDestroy (config->substPattern);
     FcSubstDestroy (config->substFont);
     FcSubstDestroy (config->substScan);
@@ -375,7 +370,7 @@ FcConfigAddDirList (FcConfig *config, FcSetName set, FcStrSet *dirSet)
     while ((dir = FcStrListNext (dirlist)))
     {
 	if (FcDebug () & FC_DBG_FONTSET)
-	    printf ("adding fonts from%s\n", dir);
+	    printf ("adding fonts from %s\n", dir);
 	cache = FcDirCacheRead (dir, FcFalse, config);
 	if (!cache)
 	    continue;
@@ -434,6 +429,7 @@ retry:
     if (!fc_atomic_ptr_cmpexch (&_fcConfig, cfg, config))
 	goto retry;
 
+    FcConfigReference (config);
     if (cfg)
 	FcConfigDestroy (cfg);
 
@@ -567,40 +563,49 @@ FcConfigSetFonts (FcConfig	*config,
     config->fonts[set] = fonts;
 }
 
+
 FcBlanks *
-FcConfigGetBlanks (FcConfig	*config)
+FcBlanksCreate (void)
 {
-    if (!config)
-    {
-	config = FcConfigGetCurrent ();
-	if (!config)
-	    return 0;
-    }
-    return config->blanks;
+    /* Deprecated. */
+    return NULL;
+}
+
+void
+FcBlanksDestroy (FcBlanks *b FC_UNUSED)
+{
+    /* Deprecated. */
 }
 
 FcBool
-FcConfigAddBlank (FcConfig	*config,
-		  FcChar32    	blank)
+FcBlanksAdd (FcBlanks *b FC_UNUSED, FcChar32 ucs4 FC_UNUSED)
 {
-    FcBlanks	*b, *freeme = 0;
-
-    b = config->blanks;
-    if (!b)
-    {
-	freeme = b = FcBlanksCreate ();
-	if (!b)
-	    return FcFalse;
-    }
-    if (!FcBlanksAdd (b, blank))
-    {
-        if (freeme)
-            FcBlanksDestroy (freeme);
-	return FcFalse;
-    }
-    config->blanks = b;
-    return FcTrue;
+    /* Deprecated. */
+    return FcFalse;
 }
+
+FcBool
+FcBlanksIsMember (FcBlanks *b FC_UNUSED, FcChar32 ucs4 FC_UNUSED)
+{
+    /* Deprecated. */
+    return FcFalse;
+}
+
+FcBlanks *
+FcConfigGetBlanks (FcConfig	*config FC_UNUSED)
+{
+    /* Deprecated. */
+    return NULL;
+}
+
+FcBool
+FcConfigAddBlank (FcConfig	*config FC_UNUSED,
+		  FcChar32    	blank FC_UNUSED)
+{
+    /* Deprecated. */
+    return FcFalse;
+}
+
 
 int
 FcConfigGetRescanInterval (FcConfig *config)
@@ -722,6 +727,16 @@ FcConfigPromote (FcValue v, FcValue u, FcValuePromotionBuffer *buf)
 	v.u.l = FcLangSetPromote (v.u.s, buf);
 	v.type = FcTypeLangSet;
     }
+    else if (v.type == FcTypeVoid && u.type == FcTypeLangSet)
+    {
+	v.u.l = FcLangSetPromote (NULL, buf);
+	v.type = FcTypeLangSet;
+    }
+    else if (v.type == FcTypeVoid && u.type == FcTypeCharSet)
+    {
+	v.u.c = FcCharSetPromote (buf);
+	v.type = FcTypeCharSet;
+    }
     if (buf && v.type == FcTypeDouble && u.type == FcTypeRange)
     {
 	v.u.r = FcRangePromote (v.u.d, buf);
@@ -781,13 +796,29 @@ FcConfigCompareValue (const FcValue	*left_o,
 	case FcTypeBool:
 	    switch ((int) op) {
 	    case FcOpEqual:
-	    case FcOpContains:
-	    case FcOpListing:
 		ret = left.u.b == right.u.b;
 		break;
+	    case FcOpContains:
+	    case FcOpListing:
+		ret = left.u.b == right.u.b || left.u.b == FcDontCare;
+		break;
 	    case FcOpNotEqual:
-	    case FcOpNotContains:
 		ret = left.u.b != right.u.b;
+		break;
+	    case FcOpNotContains:
+		ret = !(left.u.b == right.u.b || left.u.b == FcDontCare);
+		break;
+	    case FcOpLess:
+		ret = left.u.b != right.u.b && right.u.b == FcDontCare;
+		break;
+	    case FcOpLessEqual:
+		ret = left.u.b == right.u.b || right.u.b == FcDontCare;
+		break;
+	    case FcOpMore:
+		ret = left.u.b != right.u.b && left.u.b == FcDontCare;
+		break;
+	    case FcOpMoreEqual:
+		ret = left.u.b == right.u.b || left.u.b == FcDontCare;
 		break;
 	    default:
 		break;
@@ -1532,15 +1563,52 @@ FcConfigSubstituteWithPat (FcConfig    *config,
 	    FcStrList *l = FcStrListCreate (strs);
 	    FcChar8 *lang;
 	    FcValue v;
+	    FcLangSet *lsund = FcLangSetCreate ();
 
+	    FcLangSetAdd (lsund, (const FcChar8 *)"und");
 	    FcStrSetDestroy (strs);
 	    while (l && (lang = FcStrListNext (l)))
 	    {
+		FcPatternElt *e = FcPatternObjectFindElt (p, FC_LANG_OBJECT);
+
+		if (e)
+		{
+		    FcValueListPtr ll;
+
+		    for (ll = FcPatternEltValues (e); ll; ll = FcValueListNext (ll))
+		    {
+			FcValue vv = FcValueCanonicalize (&ll->value);
+
+			if (vv.type == FcTypeLangSet)
+			{
+			    FcLangSet *ls = FcLangSetCreate ();
+			    FcBool b;
+
+			    FcLangSetAdd (ls, lang);
+			    b = FcLangSetContains (vv.u.l, ls);
+			    FcLangSetDestroy (ls);
+			    if (b)
+				goto bail_lang;
+			    if (FcLangSetContains (vv.u.l, lsund))
+				goto bail_lang;
+			}
+			else
+			{
+			    if (FcStrCmpIgnoreCase (vv.u.s, lang) == 0)
+				goto bail_lang;
+			    if (FcStrCmpIgnoreCase (vv.u.s, (const FcChar8 *)"und") == 0)
+				goto bail_lang;
+			}
+		    }
+		}
 		v.type = FcTypeString;
 		v.u.s = lang;
+
 		FcPatternObjectAddWithBinding (p, FC_LANG_OBJECT, v, FcValueBindingWeak, FcTrue);
 	    }
+	bail_lang:
 	    FcStrListDone (l);
+	    FcLangSetDestroy (lsund);
 	}
 	if (FcPatternObjectGet (p, FC_PRGNAME_OBJECT, 0, &v) == FcResultNoMatch)
 	{
@@ -1792,6 +1860,7 @@ FcConfigSubstitute (FcConfig	*config,
 #if defined (_WIN32)
 
 static FcChar8 fontconfig_path[1000] = ""; /* MT-dontcare */
+FcChar8 fontconfig_instprefix[1000] = ""; /* MT-dontcare */
 
 #  if (defined (PIC) || defined (DLL_EXPORT))
 
@@ -1826,6 +1895,7 @@ DllMain (HINSTANCE hinstDLL,
 	  if (p && (FcStrCmpIgnoreCase (p + 1, (const FcChar8 *) "bin") == 0 ||
 		    FcStrCmpIgnoreCase (p + 1, (const FcChar8 *) "lib") == 0))
 	      *p = '\0';
+	  strcat ((char *) fontconfig_instprefix, (char *) fontconfig_path);
 	  strcat ((char *) fontconfig_path, "\\etc\\fonts");
       }
       else
@@ -1999,6 +2069,8 @@ FcConfigXdgCacheHome (void)
     const char *env = getenv ("XDG_CACHE_HOME");
     FcChar8 *ret = NULL;
 
+    if (!_FcConfigHomeEnabled)
+	return NULL;
     if (env)
 	ret = FcStrCopy ((const FcChar8 *)env);
     else
@@ -2024,6 +2096,8 @@ FcConfigXdgConfigHome (void)
     const char *env = getenv ("XDG_CONFIG_HOME");
     FcChar8 *ret = NULL;
 
+    if (!_FcConfigHomeEnabled)
+	return NULL;
     if (env)
 	ret = FcStrCopy ((const FcChar8 *)env);
     else
@@ -2049,6 +2123,8 @@ FcConfigXdgDataHome (void)
     const char *env = getenv ("XDG_DATA_HOME");
     FcChar8 *ret = NULL;
 
+    if (!_FcConfigHomeEnabled)
+	return NULL;
     if (env)
 	ret = FcStrCopy ((const FcChar8 *)env);
     else
@@ -2148,7 +2224,7 @@ FcConfigAppFontAddFile (FcConfig    *config,
 	    return FcFalse;
     }
 
-    subdirs = FcStrSetCreate ();
+    subdirs = FcStrSetCreateEx (FCSS_GROW_BY_64);
     if (!subdirs)
 	return FcFalse;
 
@@ -2164,7 +2240,7 @@ FcConfigAppFontAddFile (FcConfig    *config,
 	FcConfigSetFonts (config, set, FcSetApplication);
     }
 	
-    if (!FcFileScanConfig (set, subdirs, config->blanks, file, config))
+    if (!FcFileScanConfig (set, subdirs, file, config))
     {
 	FcStrSetDestroy (subdirs);
 	return FcFalse;
@@ -2195,7 +2271,7 @@ FcConfigAppFontAddDir (FcConfig	    *config,
 	    return FcFalse;
     }
 
-    dirs = FcStrSetCreate ();
+    dirs = FcStrSetCreateEx (FCSS_GROW_BY_64);
     if (!dirs)
 	return FcFalse;
 
@@ -2326,7 +2402,7 @@ void
 FcConfigSetSysRoot (FcConfig      *config,
 		    const FcChar8 *sysroot)
 {
-    FcChar8 *s;
+    FcChar8 *s = NULL;
     FcBool init = FcFalse;
 
     if (!config)
@@ -2346,9 +2422,12 @@ FcConfigSetSysRoot (FcConfig      *config,
 	}
     }
 
-    s = FcStrCopyFilename (sysroot);
-    if (!s)
-	return;
+    if (sysroot)
+    {
+	s = FcStrCopyFilename (sysroot);
+	if (!s)
+	    return;
+    }
 
     if (config->sysRoot)
 	FcStrFree (config->sysRoot);
@@ -2358,6 +2437,10 @@ FcConfigSetSysRoot (FcConfig      *config,
     {
 	config = FcInitLoadOwnConfigAndFonts (config);
 	FcConfigSetCurrent (config);
+	/* FcConfigSetCurrent() increases the refcount.
+	 * decrease it here to avoid the memory leak.
+	 */
+	FcConfigDestroy (config);
     }
 }
 

@@ -70,6 +70,12 @@ extern pfnSHGetFolderPathA pSHGetFolderPathA;
 #  define FC_DIR_SEPARATOR_S       "/"
 #endif
 
+#ifdef PATH_MAX
+#define FC_PATH_MAX	PATH_MAX
+#else
+#define FC_PATH_MAX	128
+#endif
+
 #if __GNUC__ >= 4
 #define FC_UNUSED	__attribute__((unused))
 #else
@@ -87,6 +93,7 @@ extern pfnSHGetFolderPathA pSHGetFolderPathA;
 #define FC_DBG_SCANV	256
 #define FC_DBG_CONFIG	1024
 #define FC_DBG_LANGSET	2048
+#define FC_DBG_MATCH2	4096
 
 #define _FC_ASSERT_STATIC1(_line, _cond) typedef int _static_assert_on_line_##_line##_failed[(_cond)?1:-1] FC_UNUSED
 #define _FC_ASSERT_STATIC0(_line, _cond) _FC_ASSERT_STATIC1 (_line, (_cond))
@@ -94,12 +101,6 @@ extern pfnSHGetFolderPathA pSHGetFolderPathA;
 
 #define FC_MIN(a,b) ((a) < (b) ? (a) : (b))
 #define FC_MAX(a,b) ((a) > (b) ? (a) : (b))
-#define FC_ABS(a)   ((a) < 0 ? -(a) : (a))
-
-#define FcDoubleIsZero(a)	(fabs ((a)) <= DBL_EPSILON)
-#define FcDoubleCmpEQ(a,b)	(fabs ((a) - (b)) <= DBL_EPSILON)
-#define FcDoubleCmpGE(a,b)	(FcDoubleCmpEQ (a, b) || (a) > (b))
-#define FcDoubleCmpLE(a,b)	(FcDoubleCmpEQ (a, b) || (a) < (b))
 
 /* slim_internal.h */
 #if (__GNUC__ > 3 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 3)) && defined(__ELF__) && !defined(__sun)
@@ -113,12 +114,6 @@ extern pfnSHGetFolderPathA pSHGetFolderPathA;
 #endif
 
 FC_ASSERT_STATIC (sizeof (FcRef) == sizeof (int));
-
-typedef enum _FcValueBinding {
-    FcValueBindingWeak, FcValueBindingStrong, FcValueBindingSame,
-    /* to make sure sizeof (FcValueBinding) == 4 even with -fshort-enums */
-    FcValueBindingEnd = INT_MAX
-} FcValueBinding;
 
 #define FcStrdup(s) ((FcChar8 *) strdup ((const char *) (s)))
 #define FcFree(s) (free ((FcChar8 *) (s)))
@@ -252,21 +247,9 @@ typedef struct _FcExprName {
   FcMatchKind	kind;
 } FcExprName;
 
-typedef struct _FcRangeInt {
-    FcChar32 begin;
-    FcChar32 end;
-} FcRangeInt;
-typedef struct _FcRangeDouble {
+struct _FcRange {
     double begin;
     double end;
-} FcRangeDouble;
-struct _FcRange {
-    FcBool is_double;
-    FcBool is_inclusive;
-    union {
-	FcRangeInt i;
-	FcRangeDouble d;
-    } u;
 };
 
 
@@ -355,11 +338,19 @@ struct _FcCharSet {
 					       FcCharLeaf))
 #define FcCharSetNumbers(c)	FcOffsetMember(c,numbers_offset,FcChar16)
 
+#define FCSS_DEFAULT            0 /* default behavior */
+#define FCSS_ALLOW_DUPLICATES   1 /* allows for duplicate strings in the set */
+#define FCSS_GROW_BY_64         2 /* grows buffer by 64 elements instead of 1 */
+
+#define FcStrSetHasControlBit(s,c)  (s->control & c)
+#define FcStrSetHasControlBits(s,c) ( (c) == (s->control & (c)) )
+
 struct _FcStrSet {
     FcRef	    ref;	/* reference count */
     int		    num;
     int		    size;
     FcChar8	    **strs;
+    unsigned int    control;    /* control bits for set behavior */
 };
 
 struct _FcStrList {
@@ -378,13 +369,14 @@ typedef struct _FcStrBuf {
 
 struct _FcCache {
     unsigned int magic;              /* FC_CACHE_MAGIC_MMAP or FC_CACHE_ALLOC */
-    int		version;	    /* FC_CACHE_CONTENT_VERSION */
+    int		version;	    /* FC_CACHE_VERSION_NUMBER */
     intptr_t	size;		    /* size of file */
     intptr_t	dir;		    /* offset to dir name */
     intptr_t	dirs;		    /* offset to subdirs */
     int		dirs_count;	    /* number of subdir strings */
     intptr_t	set;		    /* offset to font set */
     int		checksum;	    /* checksum of directory state */
+    int64_t	checksum_nano;	    /* checksum of directory state */
 };
 
 #undef FcCacheDir
@@ -470,19 +462,12 @@ typedef struct _FcCaseFold {
 
 #define FC_CACHE_MAGIC_MMAP	    0xFC02FC04
 #define FC_CACHE_MAGIC_ALLOC	    0xFC02FC05
-#define FC_CACHE_CONTENT_VERSION    4
 
 struct _FcAtomic {
     FcChar8	*file;		/* original file name */
     FcChar8	*new;		/* temp file name -- write data here */
     FcChar8	*lck;		/* lockfile name (used for locking) */
     FcChar8	*tmp;		/* tmpfile name (used for locking) */
-};
-
-struct _FcBlanks {
-    int		nblank;
-    int		sblank;
-    FcChar32	*blanks;
 };
 
 struct _FcConfig {
@@ -492,11 +477,6 @@ struct _FcConfig {
      * and those directives may occur in any order
      */
     FcStrSet	*configDirs;	    /* directories to scan for fonts */
-    /*
-     * Set of allowed blank chars -- used to
-     * trim fonts of bogus glyphs
-     */
-    FcBlanks	*blanks;
     /*
      * List of directories containing fonts,
      * built by recursively scanning the set
@@ -576,8 +556,6 @@ struct _FcValuePromotionBuffer {
   } u;
 };
 
-/* fcblanks.c */
-
 /* fccache.c */
 
 FcPrivate FcCache *
@@ -606,6 +584,13 @@ FcCacheFini (void);
 
 FcPrivate void
 FcDirCacheReference (FcCache *cache, int nref);
+
+FcPrivate int
+FcDirCacheLock (const FcChar8 *dir,
+		FcConfig      *config);
+
+FcPrivate void
+FcDirCacheUnlock (int fd);
 
 /* fccfg.c */
 
@@ -720,6 +705,9 @@ FcPrivate FcLangSet *
 FcLangSetSerialize(FcSerialize *serialize, const FcLangSet *l);
 
 /* fccharset.c */
+FcPrivate FcCharSet *
+FcCharSetPromote (FcValuePromotionBuffer *vbuf);
+
 FcPrivate void
 FcLangCharSetPopulate (void);
 
@@ -808,6 +796,9 @@ FcSubstPrint (const FcSubst *subst);
 FcPrivate void
 FcCharSetPrint (const FcCharSet *c);
 
+FcPrivate void
+FcPatternPrint2 (FcPattern *p1, FcPattern *p2, const FcObjectSet *os);
+
 extern FcPrivate int FcDebugVal;
 
 #define FcDebug() (FcDebugVal)
@@ -836,14 +827,12 @@ FcFileIsFile (const FcChar8 *file);
 FcPrivate FcBool
 FcFileScanConfig (FcFontSet	*set,
 		  FcStrSet	*dirs,
-		  FcBlanks	*blanks,
 		  const FcChar8 *file,
 		  FcConfig	*config);
 
 FcPrivate FcBool
 FcDirScanConfig (FcFontSet	*set,
 		 FcStrSet	*dirs,
-		 FcBlanks	*blanks,
 		 const FcChar8	*dir,
 		 FcBool		force,
 		 FcConfig	*config);
@@ -863,18 +852,6 @@ FcFontSetSerialize (FcSerialize *serialize, const FcFontSet * s);
 FcPrivate FcFontSet *
 FcFontSetDeserialize (const FcFontSet *set);
 
-/* fchash.c */
-FcPrivate FcChar8 *
-FcHashGetSHA256Digest (const FcChar8 *input_strings,
-		       size_t         len);
-
-FcPrivate FcChar8 *
-FcHashGetSHA256DigestFromFile (const FcChar8 *filename);
-
-FcPrivate FcChar8 *
-FcHashGetSHA256DigestFromMemory (const char *fontdata,
-				 size_t      length);
-
 /* fcinit.c */
 FcPrivate FcConfig *
 FcInitLoadOwnConfig (FcConfig *config);
@@ -883,6 +860,9 @@ FcPrivate FcConfig *
 FcInitLoadOwnConfigAndFonts (FcConfig *config);
 
 /* fcxml.c */
+FcPrivate void
+FcConfigPathFini (void);
+
 FcPrivate void
 FcTestDestroy (FcTest *test);
 
@@ -998,6 +978,9 @@ FcPrivate FcBool
 FcPatternObjectAddWeak (FcPattern *p, FcObject object, FcValue value, FcBool append);
 
 FcPrivate FcResult
+FcPatternObjectGetWithBinding (const FcPattern *p, FcObject object, int id, FcValue *v, FcValueBinding *b);
+
+FcPrivate FcResult
 FcPatternObjectGet (const FcPattern *p, FcObject object, int id, FcValue *v);
 
 FcPrivate FcBool
@@ -1057,6 +1040,9 @@ FcPatternObjectGetRange (const FcPattern *p, FcObject object, int id, FcRange **
 FcPrivate FcBool
 FcPatternAppend (FcPattern *p, FcPattern *s);
 
+FcPrivate int
+FcPatternPosition (const FcPattern *p, const char *object);
+
 FcPrivate FcChar32
 FcStringHash (const FcChar8 *s);
 
@@ -1083,14 +1069,8 @@ FcMatrixFree (FcMatrix *mat);
 
 /* fcrange.c */
 
-FcPrivate FcRange
-FcRangeCanonicalize (const FcRange *range);
-
 FcPrivate FcRange *
 FcRangePromote (double v, FcValuePromotionBuffer *vbuf);
-
-FcPrivate FcBool
-FcRangeIsZero (const FcRange *r);
 
 FcPrivate FcBool
 FcRangeIsInRange (const FcRange *a, const FcRange *b);
@@ -1122,6 +1102,9 @@ FcPrivate FcBool
 FcIsFsMtimeBroken (const FcChar8 *dir);
 
 /* fcstr.c */
+FcPrivate FcStrSet *
+FcStrSetCreateEx (unsigned int control);
+
 FcPrivate FcBool
 FcStrSetAddLangs (FcStrSet *strs, const char *languages);
 
@@ -1154,12 +1137,6 @@ FcStrCmpIgnoreBlanksAndCase (const FcChar8 *s1, const FcChar8 *s2);
 
 FcPrivate int
 FcStrCmpIgnoreCaseAndDelims (const FcChar8 *s1, const FcChar8 *s2, const FcChar8 *delims);
-
-FcPrivate FcBool
-FcStrRegexCmp (const FcChar8 *s, const FcChar8 *regex);
-
-FcPrivate FcBool
-FcStrRegexCmpIgnoreCase (const FcChar8 *s, const FcChar8 *regex);
 
 FcPrivate const FcChar8 *
 FcStrContainsIgnoreBlanksAndCase (const FcChar8 *s1, const FcChar8 *s2);
@@ -1200,6 +1177,9 @@ FcPrivate FcChar8 *
 FcStrSerialize (FcSerialize *serialize, const FcChar8 *str);
 
 /* fcobjs.c */
+
+FcPrivate void
+FcObjectFini (void);
 
 FcPrivate FcObject
 FcObjectLookupIdByName (const char *str);

@@ -425,6 +425,12 @@ FcPatternObjectPosition (const FcPattern *p, FcObject object)
     return -(mid + 1);
 }
 
+int
+FcPatternPosition (const FcPattern *p, const char *object)
+{
+    return FcPatternObjectPosition (p, FcObjectFromName (object));
+}
+
 FcPatternElt *
 FcPatternObjectFindElt (const FcPattern *p, FcObject object)
 {
@@ -877,7 +883,7 @@ FcPatternAddRange (FcPattern *p, const char *object, const FcRange *r)
 }
 
 FcResult
-FcPatternObjectGet (const FcPattern *p, FcObject object, int id, FcValue *v)
+FcPatternObjectGetWithBinding (const FcPattern *p, FcObject object, int id, FcValue *v, FcValueBinding *b)
 {
     FcPatternElt   *e;
     FcValueListPtr l;
@@ -892,6 +898,8 @@ FcPatternObjectGet (const FcPattern *p, FcObject object, int id, FcValue *v)
 	if (!id)
 	{
 	    *v = FcValueCanonicalize(&l->value);
+	    if (b)
+		*b = l->binding;
 	    return FcResultMatch;
 	}
 	id--;
@@ -900,9 +908,21 @@ FcPatternObjectGet (const FcPattern *p, FcObject object, int id, FcValue *v)
 }
 
 FcResult
+FcPatternObjectGet (const FcPattern *p, FcObject object, int id, FcValue *v)
+{
+    return FcPatternObjectGetWithBinding (p, object, id, v, NULL);
+}
+
+FcResult
+FcPatternGetWithBinding (const FcPattern *p, const char *object, int id, FcValue *v, FcValueBinding *b)
+{
+    return FcPatternObjectGetWithBinding (p, FcObjectFromName (object), id, v, b);
+}
+
+FcResult
 FcPatternGet (const FcPattern *p, const char *object, int id, FcValue *v)
 {
-    return FcPatternObjectGet (p, FcObjectFromName (object), id, v);
+    return FcPatternObjectGetWithBinding (p, FcObjectFromName (object), id, v, NULL);
 }
 
 FcResult
@@ -1092,6 +1112,9 @@ FcPatternDuplicate (const FcPattern *orig)
     FcPatternElt    *e;
     int		    i;
     FcValueListPtr  l;
+
+    if (!orig)
+	return NULL;
 
     new = FcPatternCreate ();
     if (!new)

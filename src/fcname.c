@@ -88,7 +88,9 @@ FcObjectValidType (FcObject object, FcType type)
 		return FcTrue;
 	    break;
 	case FcTypeRange:
-	    if (type == FcTypeRange || type == FcTypeDouble)
+	    if (type == FcTypeRange ||
+		type == FcTypeDouble ||
+		type == FcTypeInteger)
 		return FcTrue;
 	    break;
 	default:
@@ -136,6 +138,8 @@ static const FcConstant _FcBaseConstants[] = {
     { (FcChar8 *) "thin",	    "weight",   FC_WEIGHT_THIN, },
     { (FcChar8 *) "extralight",	    "weight",   FC_WEIGHT_EXTRALIGHT, },
     { (FcChar8 *) "ultralight",	    "weight",   FC_WEIGHT_EXTRALIGHT, },
+    { (FcChar8 *) "demilight",	    "weight",   FC_WEIGHT_DEMILIGHT, },
+    { (FcChar8 *) "semilight",	    "weight",   FC_WEIGHT_DEMILIGHT, },
     { (FcChar8 *) "light",	    "weight",   FC_WEIGHT_LIGHT, },
     { (FcChar8 *) "book",	    "weight",	FC_WEIGHT_BOOK, },
     { (FcChar8 *) "regular",	    "weight",   FC_WEIGHT_REGULAR, },
@@ -254,6 +258,11 @@ FcNameBool (const FcChar8 *v, FcBool *result)
 	*result = FcFalse;
 	return FcTrue;
     }
+    if (c0 == 'd' || c0 == 'x' || c0 == '2')
+    {
+	*result = FcDontCare;
+	return FcTrue;
+    }
     if (c0 == 'o')
     {
 	c1 = v[1];
@@ -266,6 +275,11 @@ FcNameBool (const FcChar8 *v, FcBool *result)
 	if (c1 == 'f')
 	{
 	    *result = FcFalse;
+	    return FcTrue;
+	}
+	if (c1 == 'r')
+	{
+	    *result = FcDontCare;
 	    return FcTrue;
 	}
     }
@@ -314,7 +328,7 @@ FcNameConvert (FcType type, FcChar8 *string)
 	    v.type = FcTypeVoid;
 	break;
     case FcTypeRange:
-	if (sscanf ((char *) string, "(%lg %lg)", &b, &e) != 2)
+	if (sscanf ((char *) string, "[%lg %lg]", &b, &e) != 2)
 	{
 	    v.u.d = strtod ((char *) string, &p);
 	    if (p != NULL && p[0] != 0)
@@ -496,7 +510,6 @@ FcNameUnparseValue (FcStrBuf	*buf,
 {
     FcChar8	temp[1024];
     FcValue v = FcValueCanonicalize(v0);
-    FcRange r;
 
     switch (v.type) {
     case FcTypeUnknown:
@@ -511,7 +524,10 @@ FcNameUnparseValue (FcStrBuf	*buf,
     case FcTypeString:
 	return FcNameUnparseString (buf, v.u.s, escape);
     case FcTypeBool:
-	return FcNameUnparseString (buf, v.u.b ? (FcChar8 *) "True" : (FcChar8 *) "False", 0);
+	return FcNameUnparseString (buf,
+				    v.u.b == FcTrue  ? (FcChar8 *) "True" :
+				    v.u.b == FcFalse ? (FcChar8 *) "False" :
+				                       (FcChar8 *) "DontCare", 0);
     case FcTypeMatrix:
 	sprintf ((char *) temp, "%g %g %g %g",
 		 v.u.m->xx, v.u.m->xy, v.u.m->yx, v.u.m->yy);
@@ -523,17 +539,8 @@ FcNameUnparseValue (FcStrBuf	*buf,
     case FcTypeFTFace:
 	return FcTrue;
     case FcTypeRange:
-	r = FcRangeCanonicalize (v.u.r);
-	if (!FcDoubleIsZero (r.u.d.begin) || !FcDoubleIsZero (r.u.d.end))
-	{
-	    if (FcDoubleCmpEQ (r.u.d.begin, r.u.d.end))
-		sprintf ((char *) temp, "%g", r.u.d.begin);
-	    else
-		sprintf ((char *) temp, "(%g %g)", r.u.d.begin, r.u.d.end);
-	    return FcNameUnparseString (buf, temp, 0);
-	}
-	else
-	    return FcTrue;
+	sprintf ((char *) temp, "[%g %g]", v.u.r->begin, v.u.r->end);
+	return FcNameUnparseString (buf, temp, 0);
     }
     return FcFalse;
 }

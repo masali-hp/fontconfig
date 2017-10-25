@@ -9,7 +9,6 @@ AM_TESTS_ENVIRONMENT= \
 	$(NULL)
 
 SH_LOG_COMPILER = sh
-
 TESTS=run-test.sh
 
 TESTDATA=4x6.pcf 8x16.pcf out.expected fonts.conf.in
@@ -24,6 +23,17 @@ test_pthread_LDADD = $(top_builddir)/src/libfontconfig.la
 # to meaningfully test anything, and we are not installed yet.
 #TESTS += test-pthread
 endif
+check_PROGRAMS += test-bz89617
+test_bz89617_CFLAGS = \
+	-DSRCDIR="\"$(abs_srcdir)\""
+
+test_bz89617_LDADD = $(top_builddir)/src/libfontconfig.la
+TESTS += test-bz89617
+
+check_PROGRAMS += test-bz131804
+test_bz131804_LDADD = $(top_builddir)/src/libfontconfig.la
+TESTS += test-bz131804
+
 noinst_PROGRAMS = $(check_PROGRAMS)
 
 if !OS_WIN32
@@ -31,7 +41,11 @@ check_PROGRAMS += test-migration
 test_migration_LDADD = $(top_builddir)/src/libfontconfig.la
 endif
 
-EXTRA_DIST=$(check_SCRIPTS) $(TESTDATA)
+check_PROGRAMS += test-bz96676
+test_bz96676_LDADD = $(top_builddir)/src/libfontconfig.la
+TESTS += test-bz96676
+
+EXTRA_DIST=run-test.sh $(TESTDATA)
 
 CLEANFILES=
 

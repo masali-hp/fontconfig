@@ -1,7 +1,8 @@
 /*
- * fontconfig/src/fcblanks.c
+ * fontconfig/test/test-bz89617.c
  *
- * Copyright © 2002 Keith Packard
+ * Copyright © 2000 Keith Packard
+ * Copyright © 2015 Akira TAGOH
  *
  * Permission to use, copy, modify, distribute, and sell this software and its
  * documentation for any purpose is hereby granted without fee, provided that
@@ -21,67 +22,19 @@
  * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
  */
+#include <stdio.h>
+#include <fontconfig/fontconfig.h>
 
-#include "fcint.h"
-
-FcBlanks *
-FcBlanksCreate (void)
+int
+main (void)
 {
-    FcBlanks	*b;
+    FcConfig *config = FcConfigCreate ();
 
-    b = malloc (sizeof (FcBlanks));
-    if (!b)
-	return 0;
-    b->nblank = 0;
-    b->sblank = 0;
-    b->blanks = 0;
-    return b;
+    if (!FcConfigAppFontAddFile (config, (const FcChar8 *)SRCDIR "/4x6.pcf") ||
+	FcConfigAppFontAddFile (config, (const FcChar8 *)"/dev/null"))
+	return 1;
+
+    FcConfigDestroy (config);
+
+    return 0;
 }
-
-void
-FcBlanksDestroy (FcBlanks *b)
-{
-    if (b->blanks)
-	free (b->blanks);
-    free (b);
-}
-
-FcBool
-FcBlanksAdd (FcBlanks *b, FcChar32 ucs4)
-{
-    FcChar32	*c;
-    int		sblank;
-
-    for (sblank = 0; sblank < b->nblank; sblank++)
-	if (b->blanks[sblank] == ucs4)
-	    return FcTrue;
-
-    if (b->nblank == b->sblank)
-    {
-	sblank = b->sblank + 32;
-	if (b->blanks)
-	    c = (FcChar32 *) realloc (b->blanks, sblank * sizeof (FcChar32));
-	else
-	    c = (FcChar32 *) malloc (sblank * sizeof (FcChar32));
-	if (!c)
-	    return FcFalse;
-	b->sblank = sblank;
-	b->blanks = c;
-    }
-    b->blanks[b->nblank++] = ucs4;
-    return FcTrue;
-}
-
-FcBool
-FcBlanksIsMember (FcBlanks *b, FcChar32 ucs4)
-{
-    int	i;
-
-    for (i = 0; i < b->nblank; i++)
-	if (b->blanks[i] == ucs4)
-	    return FcTrue;
-    return FcFalse;
-}
-#define __fcblanks__
-#include "fcaliastail.h"
-#undef __fcblanks__

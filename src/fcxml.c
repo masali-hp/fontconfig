@@ -54,7 +54,11 @@
 
 #ifdef _WIN32
 #include <mbstring.h>
+extern FcChar8 fontconfig_instprefix[];
 #endif
+
+static FcChar8  *__fc_userdir = NULL;
+static FcChar8  *__fc_userconf = NULL;
 
 static void
 FcExprDestroy (FcExpr *e);
@@ -78,6 +82,7 @@ FcRuleDestroy (FcRule *rule)
     case FcRuleEdit:
 	FcEditDestroy (rule->u.edit);
 	break;
+    case FcRuleUnknown:
     default:
 	break;
     }
@@ -347,7 +352,6 @@ typedef enum _FcElement {
     FcElementMatch,
     FcElementAlias,
 	
-    FcElementBlank,
     FcElementRescan,
 
     FcElementPrefer,
@@ -410,7 +414,6 @@ static const struct {
     { "match",		FcElementMatch },
     { "alias",		FcElementAlias },
 
-    { "blank",		FcElementBlank },
     { "rescan",		FcElementRescan },
 
     { "prefer",		FcElementPrefer },
@@ -608,6 +611,7 @@ FcTypeName (FcType type)
 	return "langset";
     case FcTypeRange:
 	return "range";
+    case FcTypeUnknown:
     default:
 	return "unknown";
     }
@@ -805,6 +809,7 @@ FcRuleCreate (FcRuleType type,
     case FcRuleEdit:
 	r->u.edit = (FcEdit *) p;
 	break;
+    case FcRuleUnknown:
     default:
 	free (r);
 	r = NULL;
@@ -1250,50 +1255,6 @@ FcStartElement(void *userData, const XML_Char *name, const XML_Char **attr)
 }
 
 static void
-FcParseBlank (FcConfigParse *parse)
-{
-    int		n = FcVStackElements (parse);
-    FcChar32	i, begin, end;
-    FcRange	r;
-
-    while (n-- > 0)
-    {
-	FcVStack    *v = FcVStackFetch (parse, n);
-	if (!parse->config->blanks)
-	{
-	    parse->config->blanks = FcBlanksCreate ();
-	    if (!parse->config->blanks)
-		goto bail;
-	}
-	switch ((int) v->tag) {
-	case FcVStackInteger:
-	    if (!FcBlanksAdd (parse->config->blanks, v->u.integer))
-		goto bail;
-	    break;
-	case FcVStackRange:
-	    r = FcRangeCanonicalize (v->u.range);
-	    begin = (FcChar32)r.u.d.begin;
-	    end = (FcChar32)r.u.d.end;
-	    if (begin <= end)
-	    {
-	      for (i = begin; i <= end; i++)
-	      {
-		  if (!FcBlanksAdd (parse->config->blanks, i))
-		      goto bail;
-	      }
-	    }
-	    break;
-	default:
-	    FcConfigMessage (parse, FcSevereError, "invalid element in blank");
-	    break;
-	}
-    }
-    return;
-  bail:
-    FcConfigMessage (parse, FcSevereError, "out of memory");
-}
-
-static void
 FcParseRescan (FcConfigParse *parse)
 {
     int	    n = FcVStackElements (parse);
@@ -1340,7 +1301,11 @@ FcParseInt (FcConfigParse *parse)
 static double
 FcStrtod (char *s, char **end)
 {
+#ifndef __BIONIC__
     struct lconv    *locale_data;
+#endif
+    const char	    *decimal_point;
+    int		    dlen;
     char	    *dot;
     double	    v;
 
@@ -1348,14 +1313,21 @@ FcStrtod (char *s, char **end)
      * Have to swap the decimal point to match the current locale
      * if that locale doesn't use 0x2e
      */
+#ifndef __BIONIC__
+    locale_data = localeconv ();
+    decimal_point = locale_data->decimal_point;
+    dlen = strlen (decimal_point);
+#else
+    decimal_point = ".";
+    dlen = 1;
+#endif
+
     if ((dot = strchr (s, 0x2e)) &&
-	(locale_data = localeconv ()) &&
-	(locale_data->decimal_point[0] != 0x2e ||
-	 locale_data->decimal_point[1] != 0))
+	(decimal_point[0] != 0x2e ||
+	 decimal_point[1] != 0))
     {
 	char	buf[128];
 	int	slen = strlen (s);
-	int	dlen = strlen (locale_data->decimal_point);
 	
 	if (slen + dlen > (int) sizeof (buf))
 	{
@@ -1369,7 +1341,7 @@ FcStrtod (char *s, char **end)
 	    /* mantissa */
 	    strncpy (buf, s, dot - s);
 	    /* decimal point */
-	    strcpy (buf + (dot - s), locale_data->decimal_point);
+	    strcpy (buf + (dot - s), decimal_point);
 	    /* rest of number */
 	    strcpy (buf + (dot - s) + dlen, dot + 1);
 	    buf_end = 0;
@@ -1586,7 +1558,6 @@ FcParseCharSet (FcConfigParse *parse)
     FcVStack	*vstack;
     FcCharSet	*charset = FcCharSetCreate ();
     FcChar32	i, begin, end;
-    FcRange	r;
     int n = 0;
 
     while ((vstack = FcVStackPeek (parse)))
@@ -1601,9 +1572,8 @@ FcParseCharSet (FcConfigParse *parse)
 		n++;
 	    break;
 	case FcVStackRange:
-	    r = FcRangeCanonicalize (vstack->u.range);
-	    begin = (FcChar32)r.u.d.begin;
-	    end = (FcChar32)r.u.d.end;
+	    begin = (FcChar32) vstack->u.range->begin;
+	    end = (FcChar32) vstack->u.range->end;
 
 	    if (begin <= end)
 	    {
@@ -2051,7 +2021,14 @@ FcParseDir (FcConfigParse *parse)
 
     attr = FcConfigGetAttribute (parse, "prefix");
     if (attr && FcStrCmp (attr, (const FcChar8 *)"xdg") == 0)
+    {
 	prefix = FcConfigXdgDataHome ();
+	/* home directory might be disabled.
+	 * simply ignore this element.
+	 */
+	if (!prefix)
+	    goto bail;
+    }
     data = FcStrBufDoneStatic (&parse->pstack->str);
     if (!data)
     {
@@ -2142,11 +2119,18 @@ static void
 FcParseCacheDir (FcConfigParse *parse)
 {
     const FcChar8 *attr;
-    FcChar8 *prefix = NULL, *p, *data;
+    FcChar8 *prefix = NULL, *p, *data = NULL;
 
     attr = FcConfigGetAttribute (parse, "prefix");
     if (attr && FcStrCmp (attr, (const FcChar8 *)"xdg") == 0)
+    {
 	prefix = FcConfigXdgCacheHome ();
+	/* home directory might be disabled.
+	 * simply ignore this element.
+	 */
+	if (!prefix)
+	    goto bail;
+    }
     data = FcStrBufDone (&parse->pstack->str);
     if (!data)
     {
@@ -2173,7 +2157,25 @@ FcParseCacheDir (FcConfigParse *parse)
 	data = prefix;
     }
 #ifdef _WIN32
-    if (strcmp ((const char *) data, "WINDOWSTEMPDIR_FONTCONFIG_CACHE") == 0)
+    else if (data[0] == '/' && fontconfig_instprefix[0] != '\0')
+    {
+	size_t plen = strlen ((const char *)fontconfig_instprefix);
+	size_t dlen = strlen ((const char *)data);
+
+	prefix = malloc (plen + 1 + dlen + 1);
+	if (!prefix)
+	{
+	    FcConfigMessage (parse, FcSevereError, "out of memory");
+	    goto bail;
+	}
+	strcpy ((char *) prefix, (char *) fontconfig_instprefix);
+	prefix[plen] = FC_DIR_SEPARATOR;
+	memcpy (&prefix[plen + 1], data, dlen);
+	prefix[plen + 1 + dlen] = 0;
+	FcStrFree (data);
+	data = prefix;
+    }
+    else if (strcmp ((const char *) data, "WINDOWSTEMPDIR_FONTCONFIG_CACHE") == 0)
     {
 	int rc;
 	FcStrFree (data);
@@ -2229,16 +2231,35 @@ FcParseCacheDir (FcConfigParse *parse)
 	FcStrFree (data);
 }
 
+void
+FcConfigPathFini (void)
+{
+    FcChar8 *s;
+
+retry_dir:
+    s = fc_atomic_ptr_get (&__fc_userdir);
+    if (!fc_atomic_ptr_cmpexch (&__fc_userdir, s, NULL))
+	goto retry_dir;
+    free (s);
+
+retry_conf:
+    s = fc_atomic_ptr_get (&__fc_userconf);
+    if (!fc_atomic_ptr_cmpexch (&__fc_userconf, s, NULL))
+	goto retry_conf;
+    free (s);
+}
+
 static void
 FcParseInclude (FcConfigParse *parse)
 {
     FcChar8	    *s;
     const FcChar8   *attr;
     FcBool	    ignore_missing = FcFalse;
+#ifndef _WIN32
     FcBool	    deprecated = FcFalse;
+#endif
     FcChar8	    *prefix = NULL, *p;
-    static FcChar8  *userdir = NULL;
-    static FcChar8  *userconf = NULL;
+    FcChar8	    *userdir = NULL, *userconf = NULL;
 
     s = FcStrBufDoneStatic (&parse->pstack->str);
     if (!s)
@@ -2250,15 +2271,25 @@ FcParseInclude (FcConfigParse *parse)
     if (attr && FcConfigLexBool (parse, (FcChar8 *) attr) == FcTrue)
 	ignore_missing = FcTrue;
     attr = FcConfigGetAttribute (parse, "deprecated");
+#ifndef _WIN32
     if (attr && FcConfigLexBool (parse, (FcChar8 *) attr) == FcTrue)
         deprecated = FcTrue;
+#endif
     attr = FcConfigGetAttribute (parse, "prefix");
     if (attr && FcStrCmp (attr, (const FcChar8 *)"xdg") == 0)
+    {
 	prefix = FcConfigXdgConfigHome ();
+	/* home directory might be disabled.
+	 * simply ignore this element.
+	 */
+	if (!prefix)
+	    goto bail;
+    }
     if (prefix)
     {
 	size_t plen = strlen ((const char *)prefix);
 	size_t dlen = strlen ((const char *)s);
+	FcChar8 *u;
 
 	p = realloc (prefix, plen + 1 + dlen + 1);
 	if (!p)
@@ -2274,14 +2305,32 @@ FcParseInclude (FcConfigParse *parse)
 	if (FcFileIsDir (s))
 	{
 	userdir:
+	    userdir = fc_atomic_ptr_get (&__fc_userdir);
 	    if (!userdir)
-		userdir = FcStrdup (s);
+	    {
+		u = FcStrdup (s);
+		if (!fc_atomic_ptr_cmpexch (&__fc_userdir, userdir, u))
+		{
+		    free (u);
+		    goto userdir;
+		}
+		userdir = u;
+	    }
 	}
 	else if (FcFileIsFile (s))
 	{
 	userconf:
+	    userconf = fc_atomic_ptr_get (&__fc_userconf);
 	    if (!userconf)
-		userconf = FcStrdup (s);
+	    {
+		u = FcStrdup (s);
+		if (!fc_atomic_ptr_cmpexch (&__fc_userconf, userconf, u))
+		{
+		    free (u);
+		    goto userconf;
+		}
+		userconf = u;
+	    }
 	}
 	else
 	{
@@ -2305,6 +2354,7 @@ FcParseInclude (FcConfigParse *parse)
         filename = FcConfigFilename(s);
 	if (deprecated == FcTrue &&
 	    filename != NULL &&
+	    userdir != NULL &&
 	    !FcFileIsLink (filename))
 	{
 	    if (FcFileIsDir (filename))
@@ -2835,9 +2885,6 @@ FcEndElement(void *userData, const XML_Char *name FC_UNUSED)
 	FcParseAlias (parse);
 	break;
 
-    case FcElementBlank:
-	FcParseBlank (parse);
-	break;
     case FcElementRescan:
 	FcParseRescan (parse);
 	break;
@@ -3068,7 +3115,7 @@ FcConfigParseAndLoadDir (FcConfig	*config,
     strcat ((char *) file, "/");
     base = file + strlen ((char *) file);
 
-    files = FcStrSetCreate ();
+    files = FcStrSetCreateEx (FCSS_GROW_BY_64);
     if (!files)
     {
 	ret = FcFalse;
@@ -3122,25 +3169,132 @@ pfnGetSystemWindowsDirectory pGetSystemWindowsDirectory = NULL;
 pfnSHGetFolderPathA pSHGetFolderPathA = NULL;
 #endif
 
-FcBool
-FcConfigParseAndLoad (FcConfig	    *config,
-		      const FcChar8 *name,
-		      FcBool	    complain)
+static FcBool
+FcConfigParseAndLoadFromMemoryInternal (FcConfig       *config,
+					const FcChar8  *filename,
+					const FcChar8  *buffer,
+					FcBool         complain)
 {
 
     XML_Parser	    p;
-    FcChar8	    *filename;
-    int		    fd;
-    int		    len;
+    size_t	    len;
     FcConfigParse   parse;
     FcBool	    error = FcTrue;
 
 #ifdef ENABLE_LIBXML2
     xmlSAXHandler   sax;
-    char            buf[BUFSIZ];
 #else
-    void	    *buf;
+    void            *buf;
+    const FcChar8   *s;
+    size_t	    buflen;
 #endif
+
+    if (!buffer)
+	return FcFalse;
+    len = strlen ((const char *) buffer);
+    if (FcDebug () & FC_DBG_CONFIG)
+	printf ("\tLoading config file from %s\n", filename);
+
+#ifdef ENABLE_LIBXML2
+    memset(&sax, 0, sizeof(sax));
+
+    sax.internalSubset = FcInternalSubsetDecl;
+    sax.externalSubset = FcExternalSubsetDecl;
+    sax.startElement = FcStartElement;
+    sax.endElement = FcEndElement;
+    sax.characters = FcCharacterData;
+
+    p = xmlCreatePushParserCtxt (&sax, &parse, NULL, 0, (const char *) filename);
+#else
+    p = XML_ParserCreate ("UTF-8");
+#endif
+
+    if (!p)
+	goto bail1;
+
+    if (!FcConfigParseInit (&parse, filename, config, p))
+	goto bail2;
+
+#ifndef ENABLE_LIBXML2
+
+    XML_SetUserData (p, &parse);
+
+    XML_SetDoctypeDeclHandler (p, FcStartDoctypeDecl, FcEndDoctypeDecl);
+    XML_SetElementHandler (p, FcStartElement, FcEndElement);
+    XML_SetCharacterDataHandler (p, FcCharacterData);
+	
+#endif /* ENABLE_LIBXML2 */
+
+#ifndef ENABLE_LIBXML2
+    s = buffer;
+    do {
+	buf = XML_GetBuffer (p, BUFSIZ);
+	if (!buf)
+	{
+	    FcConfigMessage (&parse, FcSevereError, "cannot get parse buffer");
+	    goto bail3;
+	}
+	if (len > BUFSIZ)
+	{
+	    buflen = BUFSIZ;
+	    len -= BUFSIZ;
+	}
+	else
+	{
+	    buflen = len;
+	    len = 0;
+	}
+	memcpy (buf, s, buflen);
+	s = s + buflen;
+#endif
+
+#ifdef ENABLE_LIBXML2
+	if (xmlParseChunk (p, (const char *)buffer, len, len == 0))
+#else
+	if (!XML_ParseBuffer (p, buflen, buflen == 0))
+#endif
+	{
+	    FcConfigMessage (&parse, FcSevereError, "%s",
+			   XML_ErrorString (XML_GetErrorCode (p)));
+	    goto bail3;
+	}
+#ifndef ENABLE_LIBXML2
+    } while (buflen != 0);
+#endif
+    error = parse.error;
+bail3:
+    FcConfigCleanup (&parse);
+bail2:
+    XML_ParserFree (p);
+bail1:
+    if (error && complain)
+    {
+	FcConfigMessage (0, FcSevereError, "Cannot load config file from %s", filename);
+	return FcFalse;
+    }
+    return FcTrue;
+}
+
+FcBool
+FcConfigParseAndLoadFromMemory (FcConfig       *config,
+				const FcChar8  *buffer,
+				FcBool         complain)
+{
+	return FcConfigParseAndLoadFromMemoryInternal (config, (const FcChar8 *)"memory", buffer, complain);
+}
+
+FcBool
+FcConfigParseAndLoad (FcConfig	    *config,
+		      const FcChar8 *name,
+		      FcBool	    complain)
+{
+    FcChar8	    *filename, *f;
+    int		    fd;
+    int		    len;
+    const FcChar8   *sysroot = FcConfigGetSysRoot (config);
+    FcStrBuf	    sbuf;
+    char            buf[BUFSIZ];
+    FcBool	    ret = FcFalse;
 
 #ifdef _WIN32
     if (!pGetSystemWindowsDirectory)
@@ -3158,9 +3312,14 @@ FcConfigParseAndLoad (FcConfig	    *config,
     }
 #endif
 
-    filename = FcConfigFilename (name);
-    if (!filename)
+    f = FcConfigFilename (name);
+    if (!f)
 	goto bail0;
+    if (sysroot)
+	filename = FcStrBuildFilename (sysroot, f, NULL);
+    else
+	filename = FcStrdup (f);
+    FcStrFree (f);
 
     if (FcStrSetMember (config->configFiles, filename))
     {
@@ -3176,88 +3335,37 @@ FcConfigParseAndLoad (FcConfig	    *config,
 
     if (FcFileIsDir (filename))
     {
-	FcBool ret = FcConfigParseAndLoadDir (config, name, filename, complain);
+	ret = FcConfigParseAndLoadDir (config, name, filename, complain);
 	FcStrFree (filename);
 	return ret;
     }
 
-    if (FcDebug () & FC_DBG_CONFIG)
-	printf ("\tLoading config file %s\n", filename);
+    FcStrBufInit (&sbuf, NULL, 0);
 
     fd = FcOpen ((char *) filename, O_RDONLY);
     if (fd == -1) {
-	FcStrFree (filename);
-	goto bail0;
+	goto bail1;
     }
 
-#ifdef ENABLE_LIBXML2
-    memset(&sax, 0, sizeof(sax));
-
-    sax.internalSubset = FcInternalSubsetDecl;
-    sax.externalSubset = FcExternalSubsetDecl;
-    sax.startElement = FcStartElement;
-    sax.endElement = FcEndElement;
-    sax.characters = FcCharacterData;
-
-    p = xmlCreatePushParserCtxt (&sax, &parse, NULL, 0, (const char *) filename);
-#else
-    p = XML_ParserCreate ("UTF-8");
-#endif
-    FcStrFree (filename);
-
-    if (!p)
-	goto bail1;
-
-    if (!FcConfigParseInit (&parse, name, config, p))
-	goto bail2;
-
-#ifndef ENABLE_LIBXML2
-
-    XML_SetUserData (p, &parse);
-
-    XML_SetDoctypeDeclHandler (p, FcStartDoctypeDecl, FcEndDoctypeDecl);
-    XML_SetElementHandler (p, FcStartElement, FcEndElement);
-    XML_SetCharacterDataHandler (p, FcCharacterData);
-	
-#endif /* ENABLE_LIBXML2 */
-
     do {
-#ifndef ENABLE_LIBXML2
-	buf = XML_GetBuffer (p, BUFSIZ);
-	if (!buf)
-	{
-	    FcConfigMessage (&parse, FcSevereError, "cannot get parse buffer");
-	    goto bail3;
-	}
-#endif
 	len = read (fd, buf, BUFSIZ);
 	if (len < 0)
 	{
-	    FcConfigMessage (&parse, FcSevereError, "failed reading config file");
-	    goto bail3;
+	    FcConfigMessage (0, FcSevereError, "failed reading config file");
+	    close (fd);
+	    goto bail1;
 	}
-
-#ifdef ENABLE_LIBXML2
-	if (xmlParseChunk (p, buf, len, len == 0))
-#else
-	if (!XML_ParseBuffer (p, len, len == 0))
-#endif
-	{
-	    FcConfigMessage (&parse, FcSevereError, "%s",
-			   XML_ErrorString (XML_GetErrorCode (p)));
-	    goto bail3;
-	}
+	FcStrBufData (&sbuf, (const FcChar8 *)buf, len);
     } while (len != 0);
-    error = parse.error;
-bail3:
-    FcConfigCleanup (&parse);
-bail2:
-    XML_ParserFree (p);
-bail1:
     close (fd);
-    fd = -1;
+
+    ret = FcConfigParseAndLoadFromMemoryInternal (config, filename, FcStrBufDoneStatic (&sbuf), complain);
+    complain = FcFalse; /* no need to reclaim here */
+bail1:
+    FcStrFree (filename);
+    FcStrBufDestroy (&sbuf);
 bail0:
-    if (error && complain)
+    if (!ret && complain)
     {
 	if (name)
 	    FcConfigMessage (0, FcSevereError, "Cannot load config file \"%s\"", name);
