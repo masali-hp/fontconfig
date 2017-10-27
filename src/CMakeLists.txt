@@ -3,7 +3,6 @@ set(sub_dir_name src)
 set( fontconfig_SRCS
     fcarch.c
     fcatomic.c
-    fcblanks.c
     fccache.c
     fccfg.c
     fccharset.c
@@ -14,7 +13,6 @@ set( fontconfig_SRCS
     fcformat.c
     fcfreetype.c
     fcfs.c
-    fchash.c
     fcinit.c
     fclang.c
     fclist.c
@@ -37,7 +35,7 @@ ${CMAKE_CURRENT_BINARY_DIR}/../fc-lang
 
 if(MSVC)
 add_definitions( -DWINPOSIX_EXPORT= -DPIC )
-set( fontconfig_SRCS ${fontconfig_SRCS} dirent.c unistd.c mmap.c )
+set( fontconfig_SRCS ${fontconfig_SRCS} )
 endif(MSVC)
 
 add_library( fontconfig SHARED ${fontconfig_SRCS} )

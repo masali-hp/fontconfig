@@ -29,8 +29,7 @@
 #include <config.h>
 #endif
 
-#include "fcstdint.h"
-
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -40,7 +39,9 @@
 #include <limits.h>
 #include <float.h>
 #include <math.h>
+#ifdef HAVE_UNISTD_H
 #include <unistd.h>
+#endif
 #include <stddef.h>
 #include <sys/types.h>
 #include <sys/stat.h>
