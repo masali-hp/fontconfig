@@ -1,38 +1,39 @@
-#!/bin/sh
-SRCDIR=$1
-shift
-HEAD=$1
-shift
-TAIL=$1
-shift
-rm -f $HEAD $TAIL
-echo "#if HAVE_GNUC_ATTRIBUTE" >> $TAIL
-cat "$@" | grep '^Fc[^ ]* *(' | sed -e 's/ *(.*$//' |
-while read name; do
-	case $name in
-	FcCacheDir|FcCacheSubdir)
-		;;
-	*)
-		alias="IA__$name"
-		hattr='__attribute((visibility("hidden")))'
-		echo "extern __typeof ($name) $alias $hattr;" >> $HEAD
-		echo "#define $name $alias" >> $HEAD
-		ifdef=`grep -l '^'$name'[ (]' "$SRCDIR"/*.c | sed -n 1p | sed -e 's/^.*\/\([^.]*\)\.c/__\1__/'`
-		if [ -z "$ifdef" ] ; then
-			echo "error: could not locate $name in src/*.c" 1>&2
-			exit 1
-		fi
-		if [ "$ifdef" != "$last" ] ; then
-			[ -n "$last" ] && echo "#endif /* $last */" >> $TAIL
-			echo "#ifdef $ifdef" >> $TAIL
-			last=$ifdef
-		fi
-		echo "# undef $name" >> $TAIL
-		cattr='__attribute((alias("'$alias'"), visibility("default")))'
-		echo "extern __typeof ($name) $name $cattr;" >> $TAIL
-		;;
-	esac
-done
-[ $? -ne 0 ] && exit 1
-echo "#endif /* $ifdef */" >> $TAIL
-echo "#endif /* HAVE_GNUC_ATTRIBUTE */" >> $TAIL
+#!/usr/bin/perl
+my $SRCDIR = shift;
+my $HEAD = shift;
+my $TAIL = shift;
+unlink $HEAD;
+unlink $TAIL;
+open(my $fh_tail, '>', $TAIL);
+open(my $fh_head, '>', $HEAD);
+print $fh_tail "#if HAVE_GNUC_ATTRIBUTE\n";
+my $last;
+while (my $filename = shift) {
+    open (HEADER, $filename) or die("Unable to open $filename");
+    while (<HEADER>) {
+        if (/^(Fc[^ ]*) \(.*$/) {
+            my $name = $1;
+            if ($name ne "FcCacheDir" and $name ne "FcCacheSubdir") {
+                my $alias="IA__$name";
+                my $hattr="__attribute((visibility(\"hidden\")))";
+                print $fh_head "extern __typeof ($name) $alias $hattr;\n";
+                print $fh_head "#define $name $alias\n";
+                my $command="grep -l \"^".$name."[ \(]\" \"$SRCDIR/*.c\"";
+                my $ifdef=`$command`;
+                $ifdef =~ s/\s+$//;
+                $ifdef ne "" or die("error: could not locate $name in src/*.c");
+                $ifdef =~ s/.*\/([^.]*)\.c/__\1__/;
+                if ($ifdef ne $last) {
+                    if (defined $last) { print $fh_tail "#endif /* $last */"."\n"; }
+                    print $fh_tail "#ifdef $ifdef\n";
+                    $last=$ifdef;
+                }
+                print $fh_tail "# undef $name\n";
+                my $cattr="__attribute((alias(\"'$alias'\"), visibility(\"default\")))";
+                print $fh_tail "extern __typeof ($name) $name $cattr;\n";
+            }
+        }
+    }
+}
+print $fh_tail "#endif /* $ifdef */"."\n";
+print $fh_tail "#endif /* HAVE_GNUC_ATTRIBUTE */"."\n";
