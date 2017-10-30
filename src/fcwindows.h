@@ -46,4 +46,12 @@
 #  include <windows.h>
 #endif
 
+#ifndef F_OK
+#define F_OK 0
+#endif
+
+#ifndef W_OK
+#define W_OK 2
+#endif
+
 #endif /* _FCWINDOWS_H_ */

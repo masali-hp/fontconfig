@@ -25,7 +25,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#if defined(HAVE_DIRENT_H)
 #include <dirent.h>
+#endif
 #include <string.h>
 #include <limits.h>
 #include <sys/types.h>
