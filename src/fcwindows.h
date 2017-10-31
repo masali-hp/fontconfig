@@ -54,4 +54,12 @@
 #define W_OK 2
 #endif
 
+#ifndef S_ISDIR
+#define S_ISDIR(x) (x == _S_IFDIR)
+#endif
+
+#ifndef S_ISREG
+#define S_ISREG(x) (x == _S_IFREG)
+#endif
+
 #endif /* _FCWINDOWS_H_ */

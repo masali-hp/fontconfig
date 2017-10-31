@@ -34,6 +34,8 @@
    */
 #cmakedefine HAVE_DIRENT_H @HAVE_DIRENT_H@
 
+typedef size_t FC_GPERF_SIZE_T;
+
 /* Define to 1 if you have the <dlfcn.h> header file. */
 #cmakedefine HAVE_DLFCN_H @HAVE_DLFCN_H@
 

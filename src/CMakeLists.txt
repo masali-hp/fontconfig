@@ -21,9 +21,11 @@ set( fontconfig_SRCS
     fcname.c
     fcobjs.c
     fcpat.c
+    fcrange.c
     fcserialize.c
     fcstat.c
     fcstr.c
+    fcweight.c
     fcxml.c
     ftglue.c
 )
@@ -36,14 +38,17 @@ set( fontconfig_generated_HDRS
     fcftaliastail.h
 )
 
-include_directories(
-${CMAKE_CURRENT_BINARY_DIR}
-${CMAKE_CURRENT_BINARY_DIR}/../fc-lang
+set( fontconfig_include_DIRS
+    ${CMAKE_CURRENT_BINARY_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/../fc-lang
 )
 
 if(MSVC)
-add_definitions( -DWINPOSIX_EXPORT= -DPIC )
-set( fontconfig_SRCS ${fontconfig_SRCS} )
+    add_definitions( -DWINPOSIX_EXPORT= -DPIC "-DFcPublic=__declspec(dllexport)" )
+    if (CMAKE_SYSTEM_NAME MATCHES "Windows")
+        set( fontconfig_SRCS ${fontconfig_SRCS} win/dirent.c)
+		set( fontconfig_include_DIRS ${fontconfig_include_DIRS} ${CMAKE_CURRENT_SOURCE_DIR}/win)
+    endif()
 endif(MSVC)
 
 ADD_CUSTOM_COMMAND(
@@ -74,6 +79,7 @@ MAKE_ALIAS("fcft"  ${PUBLIC_FT_FILES})
 
 set_source_files_properties(${fontconfig_generated_HDRS} PROPERTIES GENERATED TRUE)
 
+include_directories(${fontconfig_include_DIRS})
 add_library( fontconfig SHARED ${fontconfig_SRCS} ${fontconfig_generated_HDRS} )
 set_target_properties(fontconfig PROPERTIES OUTPUT_NAME fontconfig )
 
